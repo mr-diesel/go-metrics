@@ -3,7 +3,40 @@ package models
 const (
 	Counter = "counter"
 	Gauge   = "gauge"
+
+	RandomValue = "RandomValue"
+	PollCount   = "PollCount"
 )
+
+var RuntimeGaugeNames = []string{
+	"Alloc",
+	"BuckHashSys",
+	"Frees",
+	"GCCPUFraction",
+	"GCSys",
+	"HeapAlloc",
+	"HeapIdle",
+	"HeapInuse",
+	"HeapObjects",
+	"HeapReleased",
+	"HeapSys",
+	"LastGC",
+	"Lookups",
+	"MCacheInuse",
+	"MCacheSys",
+	"MSpanInuse",
+	"MSpanSys",
+	"Mallocs",
+	"NextGC",
+	"NumForcedGC",
+	"NumGC",
+	"OtherSys",
+	"PauseTotalNs",
+	"StackInuse",
+	"StackSys",
+	"Sys",
+	"TotalAlloc",
+}
 
 // NOTE: Не усложняем пример, вводя иерархическую вложенность структур.
 // Органичиваясь плоской моделью.
