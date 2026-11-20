@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -17,13 +18,40 @@ func (s *storageSpy) SetGauge(name string, value float64) {
 	s.gaugeName = name
 	s.gaugeValue = value
 }
+func (s *storageSpy) GetGauge(name string) (float64, bool) {
+	if s.gaugeName == name {
+		return s.gaugeValue, true
+	}
+
+	return 0, false
+}
 
 func (s *storageSpy) AddCounter(name string, value int64) {
 	s.counterName = name
 	s.counterValue = value
 }
 
-func TestNewHandler(t *testing.T) {
+func (s *storageSpy) GetCounter(name string) (int64, bool) {
+	if s.counterName == name {
+		return s.counterValue, true
+	}
+
+	return 0, false
+}
+
+func (s *storageSpy) Snapshot() (map[string]float64, map[string]int64) {
+	gauges := make(map[string]float64)
+	counters := make(map[string]int64)
+	if s.gaugeName != "" {
+		gauges[s.gaugeName] = s.gaugeValue
+	}
+	if s.counterName != "" {
+		counters[s.counterName] = s.counterValue
+	}
+	return gauges, counters
+}
+
+func TestNewHandler_UpdateMetric(t *testing.T) {
 	tests := []struct {
 		name        string
 		method      string
@@ -31,13 +59,14 @@ func TestNewHandler(t *testing.T) {
 		wantStatus  int
 		wantStorage storageSpy
 	}{
-		{"method not allowed", http.MethodGet, "/update/gauge/Temperature/12.5", http.StatusMethodNotAllowed, storageSpy{}},
+		{"get on update route", http.MethodGet, "/update/gauge/Temperature/12.5", http.StatusMethodNotAllowed, storageSpy{}},
 		{"unknown route", http.MethodGet, "/create/gauge/Temperature/12.5", http.StatusNotFound, storageSpy{}},
-		{"invalid counter value", http.MethodPost, "/update/counter/PollCount/abc", http.StatusBadRequest, storageSpy{}},
+		{"non-numeric counter value", http.MethodPost, "/update/counter/PollCount/abc", http.StatusBadRequest, storageSpy{}},
+		{"empty counter value", http.MethodPost, "/update/counter/Requests/", http.StatusBadRequest, storageSpy{}},
 		{"missing metric name", http.MethodPost, "/update/counter//5", http.StatusNotFound, storageSpy{}},
 		{"valid gauge", http.MethodPost, "/update/gauge/Temperature/12.5", http.StatusOK, storageSpy{gaugeName: "Temperature", gaugeValue: 12.5}},
 		{"valid counter", http.MethodPost, "/update/counter/Requests/5", http.StatusOK, storageSpy{counterName: "Requests", counterValue: 5}},
-		{"non-numeric gauge", http.MethodPost, "/update/gauge/Temperature/abc", http.StatusBadRequest, storageSpy{}},
+		{"non-numeric gauge value", http.MethodPost, "/update/gauge/Temperature/abc", http.StatusBadRequest, storageSpy{}},
 		{"unknown metric type", http.MethodPost, "/update/histogram/Temperature/12.5", http.StatusBadRequest, storageSpy{}},
 	}
 	for _, tt := range tests {
@@ -62,6 +91,78 @@ func TestNewHandler(t *testing.T) {
 			}
 			if got := *spy; got != tt.wantStorage {
 				t.Errorf("storage = %+v, want %+v", got, tt.wantStorage)
+			}
+		})
+	}
+}
+
+func TestNewHandler_GetValue(t *testing.T) {
+	h := NewHandler(&storageSpy{
+		gaugeName:   "Temperature",
+		gaugeValue:  12.5,
+		counterName: "Requests",
+	})
+
+	tests := []struct {
+		name       string
+		path       string
+		wantStatus int
+		wantBody   string
+	}{
+		{"stored gauge", "/value/gauge/Temperature", http.StatusOK, "12.5"},
+		{"zero counter", "/value/counter/Requests", http.StatusOK, "0"},
+		{"encoded counter name", "/value/counter/%52equests", http.StatusOK, "0"},
+		{"missing counter", "/value/counter/Missing", http.StatusNotFound, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if got := rec.Code; got != tt.wantStatus {
+				t.Errorf("status = %d, want %d", got, tt.wantStatus)
+			}
+			if got := rec.Body.String(); got != tt.wantBody {
+				t.Errorf("body = %q, want %q", got, tt.wantBody)
+			}
+		})
+	}
+}
+
+func TestNewHandler_ListMetrics(t *testing.T) {
+	tests := []struct {
+		name  string
+		spy   storageSpy
+		items []string
+	}{
+		{name: "empty storage"},
+		{
+			name:  "gauge and counter",
+			spy:   storageSpy{gaugeName: "A&B", gaugeValue: 12.5, counterName: "Requests", counterValue: 7},
+			items: []string{"A&amp;B = 12.5", "Requests = 7"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			rec := httptest.NewRecorder()
+			NewHandler(&tt.spy).ServeHTTP(rec, req)
+
+			if got := rec.Code; got != http.StatusOK {
+				t.Fatalf("status = %d, want %d", got, http.StatusOK)
+			}
+			if got := rec.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+				t.Errorf("Content-Type = %q, want text/html; charset=utf-8", got)
+			}
+			body := rec.Body.String()
+			if !strings.Contains(body, "<ul>") || strings.Count(body, "<li>") != len(tt.items) {
+				t.Errorf("want a list with %d items, got %q", len(tt.items), body)
+			}
+			for _, item := range tt.items {
+				if !strings.Contains(body, item) {
+					t.Errorf("missing metric %q in %q", item, body)
+				}
 			}
 		})
 	}

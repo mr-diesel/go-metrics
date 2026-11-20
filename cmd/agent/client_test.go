@@ -9,15 +9,15 @@ import (
 	models "github.com/mr-diesel/go-metrics/internal/model"
 )
 
-func TestSendMetrics_PollCount(t *testing.T) {
+func TestSendMetrics_ResetsPollCountOnlyOnSuccess(t *testing.T) {
 	tests := []struct {
 		name      string
 		status    int
 		wantErr   bool
 		wantCount int64
 	}{
-		{"server error", http.StatusInternalServerError, true, 5},
-		{"successfully sent", http.StatusOK, false, 0},
+		{"HTTP 500", http.StatusInternalServerError, true, 5},
+		{"HTTP 200", http.StatusOK, false, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -67,7 +67,7 @@ func TestSendMetrics_RejectsRedirect(t *testing.T) {
 	}
 }
 
-func TestSendMetrics_Gauge(t *testing.T) {
+func TestSendMetrics_PostsGaugeAsPlainText(t *testing.T) {
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
