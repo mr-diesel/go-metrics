@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"maps"
 	"sync"
@@ -9,8 +10,6 @@ import (
 	"github.com/mr-diesel/go-metrics/internal/agent"
 	models "github.com/mr-diesel/go-metrics/internal/model"
 )
-
-const defaultBaseURL = "http://localhost:8080"
 
 type agentMetrics struct {
 	mu       sync.Mutex
@@ -44,6 +43,12 @@ func (m *agentMetrics) report(baseURL string) error {
 }
 
 func main() {
+	addr := flag.String("a", "localhost:8080", "HTTP server address")
+	pollInterval := flag.Int("p", 2, "poll interval in seconds")
+	reportSeconds := flag.Int("r", 10, "report interval in seconds")
+	flag.Parse()
+	baseURL := "http://" + *addr
+	reportInterval := time.Duration(*reportSeconds) * time.Second
 	metrics := &agentMetrics{
 		gauges:   make(map[string]float64),
 		counters: make(map[string]int64),
@@ -51,17 +56,17 @@ func main() {
 
 	go func() {
 		for {
-			time.Sleep(2 * time.Second)
+			time.Sleep(time.Duration(*pollInterval) * time.Second)
 			metrics.collect()
 		}
 	}()
 
-	nextReport := time.Now().Add(10 * time.Second)
+	nextReport := time.Now().Add(reportInterval)
 
 	for {
 		time.Sleep(time.Until(nextReport))
-		nextReport = time.Now().Add(10 * time.Second)
-		err := metrics.report(defaultBaseURL)
+		nextReport = time.Now().Add(reportInterval)
+		err := metrics.report(baseURL)
 		if err != nil {
 			log.Println(err)
 		}
