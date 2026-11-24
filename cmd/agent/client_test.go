@@ -1,6 +1,7 @@
 package main
 
 import (
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,15 +10,15 @@ import (
 	models "github.com/mr-diesel/go-metrics/internal/model"
 )
 
-func TestSendMetrics_ResetsPollCountOnlyOnSuccess(t *testing.T) {
+func TestSendMetrics_ReturnsOnlySentCounters(t *testing.T) {
 	tests := []struct {
-		name      string
-		status    int
-		wantErr   bool
-		wantCount int64
+		name     string
+		status   int
+		wantErr  bool
+		wantSent map[string]int64
 	}{
-		{"HTTP 500", http.StatusInternalServerError, true, 5},
-		{"HTTP 200", http.StatusOK, false, 0},
+		{"HTTP 500", http.StatusInternalServerError, true, nil},
+		{"HTTP 200", http.StatusOK, false, map[string]int64{models.PollCount: 5}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -32,12 +33,15 @@ func TestSendMetrics_ResetsPollCountOnlyOnSuccess(t *testing.T) {
 			defer server.Close()
 
 			counters := map[string]int64{models.PollCount: 5}
-			err := SendMetrics(server.URL, nil, counters)
+			sentCounters, err := SendMetrics(server.URL, nil, counters)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("SendMetrics returned err = %v, wantErr = %t", err, tt.wantErr)
 			}
-			if got := counters[models.PollCount]; got != tt.wantCount {
-				t.Errorf("PollCount = %d, want %d", got, tt.wantCount)
+			if !maps.Equal(sentCounters, tt.wantSent) {
+				t.Errorf("sent counters = %v, want %v", sentCounters, tt.wantSent)
+			}
+			if got := counters[models.PollCount]; got != 5 {
+				t.Errorf("input PollCount = %d, want 5", got)
 			}
 		})
 	}
@@ -59,11 +63,12 @@ func TestSendMetrics_RejectsRedirect(t *testing.T) {
 	defer server.Close()
 
 	counters := map[string]int64{models.PollCount: 5}
-	if err := SendMetrics(server.URL, nil, counters); err == nil {
+	sentCounters, err := SendMetrics(server.URL, nil, counters)
+	if err == nil {
 		t.Error("SendMetrics returned nil after redirect")
 	}
-	if got := counters[models.PollCount]; got != 5 {
-		t.Errorf("PollCount = %d, want 5", got)
+	if len(sentCounters) != 0 {
+		t.Errorf("sent counters after redirect = %v, want none", sentCounters)
 	}
 }
 
@@ -86,7 +91,7 @@ func TestSendMetrics_PostsGaugeAsPlainText(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	gauges := map[string]float64{"Temperature": 12.5}
-	err := SendMetrics(server.URL, gauges, nil)
+	_, err := SendMetrics(server.URL, gauges, nil)
 	server.Close()
 
 	if err != nil {
@@ -115,7 +120,7 @@ func TestSendMetrics_ContinuesAfterGaugeError(t *testing.T) {
 
 	gauges := map[string]float64{"Temperature": 12.5}
 	counters := map[string]int64{models.PollCount: 5}
-	err := SendMetrics(server.URL, gauges, counters)
+	sentCounters, err := SendMetrics(server.URL, gauges, counters)
 	server.Close()
 
 	if !gaugeReceived || !counterReceived {
@@ -124,8 +129,8 @@ func TestSendMetrics_ContinuesAfterGaugeError(t *testing.T) {
 	if err == nil {
 		t.Error("SendMetrics returned nil after gauge failed")
 	}
-	if got := counters[models.PollCount]; got != 0 {
-		t.Errorf("PollCount = %d, want 0", got)
+	if got := sentCounters[models.PollCount]; got != 5 {
+		t.Errorf("sent PollCount = %d, want 5", got)
 	}
 }
 
@@ -138,7 +143,7 @@ func TestSendMetrics_ReportsAllErrors(t *testing.T) {
 	const gaugeName = "Temperature"
 	gauges := map[string]float64{gaugeName: 12.5}
 	counters := map[string]int64{models.PollCount: 5}
-	err := SendMetrics(server.URL, gauges, counters)
+	_, err := SendMetrics(server.URL, gauges, counters)
 	if err == nil {
 		t.Fatal("SendMetrics returned nil after both requests failed")
 	}

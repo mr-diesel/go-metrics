@@ -57,3 +57,19 @@ func TestReport_DeductsPollCountAfterGaugeError(t *testing.T) {
 		t.Errorf("PollCount = %d, want 0", got)
 	}
 }
+
+func TestReport_KeepsPollCountAfterCounterError(t *testing.T) {
+	metrics := &agentMetrics{counters: map[string]int64{models.PollCount: 5}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	if err := metrics.report(server.URL); err == nil {
+		t.Fatal("report returned nil after counter failed")
+	}
+	_, counters := metrics.snapshot()
+	if got := counters[models.PollCount]; got != 5 {
+		t.Errorf("PollCount = %d, want 5", got)
+	}
+}

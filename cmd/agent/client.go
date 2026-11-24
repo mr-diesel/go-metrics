@@ -17,7 +17,8 @@ var metricsClient = &http.Client{
 	},
 }
 
-func SendMetrics(baseURL string, gauges map[string]float64, counters map[string]int64) error {
+func SendMetrics(baseURL string, gauges map[string]float64, counters map[string]int64) (map[string]int64, error) {
+	sentCounters := make(map[string]int64)
 	var sendErrors []error
 	for name, value := range gauges {
 		rawValue := strconv.FormatFloat(value, 'g', -1, 64)
@@ -33,9 +34,9 @@ func SendMetrics(baseURL string, gauges map[string]float64, counters map[string]
 			sendErrors = append(sendErrors, fmt.Errorf("send counter %s: %w", name, err))
 			continue
 		}
-		counters[name] = 0
+		sentCounters[name] = value
 	}
-	return errors.Join(sendErrors...)
+	return sentCounters, errors.Join(sendErrors...)
 }
 
 func SendMetric(baseURL, metricType, name, value string) error {

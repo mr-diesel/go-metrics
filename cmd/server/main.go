@@ -12,10 +12,10 @@ import (
 func main() {
 	addr := flag.String("a", "localhost:8080", "HTTP server address")
 	flag.Parse()
-	m := repository.NewMemStorage()
-	h := handler.NewHandler(m)
+	storage := repository.NewMemStorage()
+	metricsHandler := handler.NewHandler(storage)
 
-	err := http.ListenAndServe(*addr, h)
+	err := http.ListenAndServe(*addr, metricsHandler)
 	if err != nil {
 		log.Fatal(err)
 	}

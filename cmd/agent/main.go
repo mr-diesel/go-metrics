@@ -4,11 +4,11 @@ import (
 	"flag"
 	"log"
 	"maps"
+	"math"
 	"sync"
 	"time"
 
 	"github.com/mr-diesel/go-metrics/internal/agent"
-	models "github.com/mr-diesel/go-metrics/internal/model"
 )
 
 type agentMetrics struct {
@@ -32,22 +32,32 @@ func (m *agentMetrics) snapshot() (map[string]float64, map[string]int64) {
 
 func (m *agentMetrics) report(baseURL string) error {
 	gauges, counters := m.snapshot()
-	pollCount := counters[models.PollCount]
-	err := SendMetrics(baseURL, gauges, counters)
-	if pollCount > 0 && counters[models.PollCount] == 0 {
-		m.mu.Lock()
-		m.counters[models.PollCount] -= pollCount
-		m.mu.Unlock()
+	sentCounters, err := SendMetrics(baseURL, gauges, counters)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for name, value := range sentCounters {
+		m.counters[name] -= value
 	}
 	return err
 }
 
 func main() {
 	addr := flag.String("a", "localhost:8080", "HTTP server address")
-	pollInterval := flag.Int("p", 2, "poll interval in seconds")
-	reportSeconds := flag.Int("r", 10, "report interval in seconds")
+	pollSeconds := flag.Int64("p", 2, "poll interval in seconds")
+	reportSeconds := flag.Int64("r", 10, "report interval in seconds")
 	flag.Parse()
+
+	const maxIntervalSeconds = math.MaxInt64 / int64(time.Second)
+	if *pollSeconds <= 0 || *pollSeconds > maxIntervalSeconds {
+		log.Fatalf("invalid -p=%d: poll interval must be between 1 and %d seconds", *pollSeconds, maxIntervalSeconds)
+	}
+	if *reportSeconds <= 0 || *reportSeconds > maxIntervalSeconds {
+		log.Fatalf("invalid -r=%d: report interval must be between 1 and %d seconds", *reportSeconds, maxIntervalSeconds)
+	}
+
 	baseURL := "http://" + *addr
+	pollInterval := time.Duration(*pollSeconds) * time.Second
 	reportInterval := time.Duration(*reportSeconds) * time.Second
 	metrics := &agentMetrics{
 		gauges:   make(map[string]float64),
@@ -56,7 +66,7 @@ func main() {
 
 	go func() {
 		for {
-			time.Sleep(time.Duration(*pollInterval) * time.Second)
+			time.Sleep(pollInterval)
 			metrics.collect()
 		}
 	}()
