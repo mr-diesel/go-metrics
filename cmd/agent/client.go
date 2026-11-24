@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -40,8 +41,8 @@ func SendMetrics(baseURL string, gauges map[string]float64, counters map[string]
 }
 
 func SendMetric(baseURL, metricType, name, value string) error {
-	url := fmt.Sprintf("%s/update/%s/%s/%s", baseURL, metricType, name, value)
-	resp, err := metricsClient.Post(url, "text/plain", nil)
+	endpoint := fmt.Sprintf("%s/update/%s/%s/%s", baseURL, metricType, url.PathEscape(name), value)
+	resp, err := metricsClient.Post(endpoint, "text/plain", nil)
 	if err != nil {
 		return err
 	}

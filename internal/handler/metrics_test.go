@@ -1,10 +1,13 @@
 package handler
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/mr-diesel/go-metrics/internal/repository"
 )
 
 type storageSpy struct {
@@ -64,7 +67,9 @@ func TestNewHandler_UpdateMetric(t *testing.T) {
 		{"non-numeric counter value", http.MethodPost, "/update/counter/PollCount/abc", http.StatusBadRequest, storageSpy{}},
 		{"empty counter value", http.MethodPost, "/update/counter/Requests/", http.StatusBadRequest, storageSpy{}},
 		{"missing metric name", http.MethodPost, "/update/counter//5", http.StatusNotFound, storageSpy{}},
+		{"missing value after encoded name", http.MethodPost, "/update/counter/jobs%2F5", http.StatusNotFound, storageSpy{}},
 		{"valid gauge", http.MethodPost, "/update/gauge/Temperature/12.5", http.StatusOK, storageSpy{gaugeName: "Temperature", gaugeValue: 12.5}},
+		{"encoded gauge name", http.MethodPost, "/update/gauge/room%2Ftemp/1.5", http.StatusOK, storageSpy{gaugeName: "room/temp", gaugeValue: 1.5}},
 		{"valid counter", http.MethodPost, "/update/counter/Requests/5", http.StatusOK, storageSpy{counterName: "Requests", counterValue: 5}},
 		{"non-numeric gauge value", http.MethodPost, "/update/gauge/Temperature/abc", http.StatusBadRequest, storageSpy{}},
 		{"unknown metric type", http.MethodPost, "/update/histogram/Temperature/12.5", http.StatusBadRequest, storageSpy{}},
@@ -127,6 +132,47 @@ func TestNewHandler_GetValue(t *testing.T) {
 				t.Errorf("body = %q, want %q", got, tt.wantBody)
 			}
 		})
+	}
+}
+
+func TestNewHandler_EncodedMetricNames(t *testing.T) {
+	server := httptest.NewServer(NewHandler(repository.NewMemStorage()))
+	defer server.Close()
+	client := server.Client()
+
+	metrics := []struct {
+		writeName, readName, value string
+	}{
+		{"%52equests", "Requests", "5"},
+		{"jobs%2Fdone", "jobs%2fdone", "7"},
+		{"jobs%252Fdone", "jobs%252Fdone", "11"},
+	}
+	for _, metric := range metrics {
+		path := "/update/counter/" + metric.writeName + "/" + metric.value
+		resp, err := client.Post(server.URL+path, "text/plain", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("POST %s: status = %d, want %d", path, resp.StatusCode, http.StatusOK)
+		}
+	}
+	for _, metric := range metrics {
+		path := "/value/counter/" + metric.readName
+		resp, err := client.Get(server.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK || string(body) != metric.value {
+			t.Errorf("GET %s: status = %d, body = %q, want %d and %q",
+				path, resp.StatusCode, body, http.StatusOK, metric.value)
+		}
 	}
 }
 

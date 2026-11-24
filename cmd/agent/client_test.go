@@ -76,11 +76,11 @@ func TestSendMetrics_PostsGaugeAsPlainText(t *testing.T) {
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		const wantPath = "/update/gauge/Temperature/12.5"
+		const wantPath = "/update/gauge/room%2Ftemperature%252F/12.5"
 		if r.Method != http.MethodPost {
 			t.Errorf("method = %q, want %q", r.Method, http.MethodPost)
 		}
-		if got := r.URL.Path; got != wantPath {
+		if got := r.URL.EscapedPath(); got != wantPath {
 			t.Errorf("path = %q, want %q", got, wantPath)
 		}
 		const wantContentType = "text/plain"
@@ -90,7 +90,7 @@ func TestSendMetrics_PostsGaugeAsPlainText(t *testing.T) {
 
 		w.WriteHeader(http.StatusOK)
 	}))
-	gauges := map[string]float64{"Temperature": 12.5}
+	gauges := map[string]float64{"room/temperature%2F": 12.5}
 	_, err := SendMetrics(server.URL, gauges, nil)
 	server.Close()
 

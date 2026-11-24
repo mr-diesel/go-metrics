@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
@@ -28,12 +29,12 @@ var metricsPage = template.Must(template.New("metrics").Parse(`<!doctype html>
 
 func NewHandler(m repository.Storage) http.Handler {
 	router := chi.NewRouter()
-	router.Use(routeByDecodedPath)
+	router.Use(routeByEscapedPath)
 
 	update := func(w http.ResponseWriter, r *http.Request) {
-		metricType := chi.URLParam(r, "type")
-		name := chi.URLParam(r, "name")
-		rawValue := chi.URLParam(r, "value")
+		metricType := decodedPathParam(r, "type")
+		name := decodedPathParam(r, "name")
+		rawValue := decodedPathParam(r, "value")
 
 		if name == "" {
 			w.WriteHeader(http.StatusNotFound)
@@ -51,8 +52,8 @@ func NewHandler(m repository.Storage) http.Handler {
 	router.Post("/update/{type}/{name}/{value}", update)
 	router.Post("/update/{type}/{name}/", update)
 	router.Get("/value/{type}/{name}", func(w http.ResponseWriter, r *http.Request) {
-		metricType := chi.URLParam(r, "type")
-		name := chi.URLParam(r, "name")
+		metricType := decodedPathParam(r, "type")
+		name := decodedPathParam(r, "name")
 		switch metricType {
 		case "counter":
 			value, ok := m.GetCounter(name)
@@ -92,11 +93,17 @@ func NewHandler(m repository.Storage) http.Handler {
 	return router
 }
 
-func routeByDecodedPath(next http.Handler) http.Handler {
+func routeByEscapedPath(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		chi.RouteContext(r.Context()).RoutePath = r.URL.Path
+		chi.RouteContext(r.Context()).RoutePath = r.URL.EscapedPath()
 		next.ServeHTTP(w, r)
 	})
+}
+
+func decodedPathParam(r *http.Request, key string) string {
+	// chi matched a whole segment of URL.EscapedPath, so its escaping is valid.
+	value, _ := url.PathUnescape(chi.URLParam(r, key))
+	return value
 }
 
 func updateMetric(m repository.Storage, metricType, name, rawValue string) error {
