@@ -12,7 +12,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	models "github.com/mr-diesel/go-metrics/internal/model"
-	"github.com/mr-diesel/go-metrics/internal/repository"
 )
 
 var metricsPage = template.Must(template.New("metrics").Parse(`<!doctype html>
@@ -27,7 +26,15 @@ var metricsPage = template.Must(template.New("metrics").Parse(`<!doctype html>
 </body>
 </html>`))
 
-func NewHandler(m repository.Storage) http.Handler {
+type Storage interface {
+	SetGauge(name string, value float64)
+	GetGauge(name string) (float64, bool)
+	AddCounter(name string, value int64)
+	GetCounter(name string) (int64, bool)
+	Snapshot() (map[string]float64, map[string]int64)
+}
+
+func NewHandler(m Storage) http.Handler {
 	router := chi.NewRouter()
 	router.Use(routeByEscapedPath)
 
@@ -55,7 +62,7 @@ func NewHandler(m repository.Storage) http.Handler {
 		metricType := decodedPathParam(r, "type")
 		name := decodedPathParam(r, "name")
 		switch metricType {
-		case "counter":
+		case models.Counter:
 			value, ok := m.GetCounter(name)
 			if !ok {
 				w.WriteHeader(http.StatusNotFound)
@@ -63,7 +70,7 @@ func NewHandler(m repository.Storage) http.Handler {
 			}
 
 			io.WriteString(w, strconv.FormatInt(value, 10))
-		case "gauge":
+		case models.Gauge:
 			value, ok := m.GetGauge(name)
 			if !ok {
 				w.WriteHeader(http.StatusNotFound)
@@ -106,7 +113,7 @@ func decodedPathParam(r *http.Request, key string) string {
 	return value
 }
 
-func updateMetric(m repository.Storage, metricType, name, rawValue string) error {
+func updateMetric(m Storage, metricType, name, rawValue string) error {
 	switch metricType {
 	case models.Gauge:
 		value, err := strconv.ParseFloat(rawValue, 64)

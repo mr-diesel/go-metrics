@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -18,21 +19,28 @@ var metricsClient = &http.Client{
 	},
 }
 
-func SendMetrics(baseURL string, gauges map[string]float64, counters map[string]int64) (map[string]int64, error) {
+func SendMetrics(ctx context.Context, baseURL string, gauges map[string]float64, counters map[string]int64) (map[string]int64, error) {
+	gaugesDone := make(chan error)
+	go func() {
+		gaugesDone <- sendGauges(ctx, baseURL, gauges)
+	}()
+
+	sentCounters, counterErr := sendCounters(ctx, baseURL, counters)
+	gaugeErr := <-gaugesDone
+	return sentCounters, errors.Join(counterErr, gaugeErr)
+}
+
+func sendCounters(ctx context.Context, baseURL string, counters map[string]int64) (map[string]int64, error) {
 	sentCounters := make(map[string]int64)
 	var sendErrors []error
-	for name, value := range gauges {
-		rawValue := strconv.FormatFloat(value, 'g', -1, 64)
-		err := SendMetric(baseURL, models.Gauge, name, rawValue)
-		if err != nil {
-			sendErrors = append(sendErrors, fmt.Errorf("send gauge %s: %w", name, err))
-		}
-	}
 	for name, value := range counters {
 		rawValue := strconv.FormatInt(value, 10)
-		err := SendMetric(baseURL, models.Counter, name, rawValue)
+		err := SendMetric(ctx, baseURL, models.Counter, name, rawValue)
 		if err != nil {
 			sendErrors = append(sendErrors, fmt.Errorf("send counter %s: %w", name, err))
+			if ctx.Err() != nil {
+				break
+			}
 			continue
 		}
 		sentCounters[name] = value
@@ -40,9 +48,29 @@ func SendMetrics(baseURL string, gauges map[string]float64, counters map[string]
 	return sentCounters, errors.Join(sendErrors...)
 }
 
-func SendMetric(baseURL, metricType, name, value string) error {
+func sendGauges(ctx context.Context, baseURL string, gauges map[string]float64) error {
+	var sendErrors []error
+	for name, value := range gauges {
+		rawValue := strconv.FormatFloat(value, 'g', -1, 64)
+		err := SendMetric(ctx, baseURL, models.Gauge, name, rawValue)
+		if err != nil {
+			sendErrors = append(sendErrors, fmt.Errorf("send gauge %s: %w", name, err))
+			if ctx.Err() != nil {
+				break
+			}
+		}
+	}
+	return errors.Join(sendErrors...)
+}
+
+func SendMetric(ctx context.Context, baseURL, metricType, name, value string) error {
 	endpoint := fmt.Sprintf("%s/update/%s/%s/%s", baseURL, metricType, url.PathEscape(name), value)
-	resp, err := metricsClient.Post(endpoint, "text/plain", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	resp, err := metricsClient.Do(req)
 	if err != nil {
 		return err
 	}

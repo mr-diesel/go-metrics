@@ -5,16 +5,6 @@ import (
 	"sync"
 )
 
-type Storage interface {
-	SetGauge(name string, value float64)
-	GetGauge(name string) (float64, bool)
-	AddCounter(name string, value int64)
-	GetCounter(name string) (int64, bool)
-	Snapshot() (map[string]float64, map[string]int64)
-}
-
-var _ Storage = (*MemStorage)(nil)
-
 type MemStorage struct {
 	gauges   map[string]float64
 	counters map[string]int64

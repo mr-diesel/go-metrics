@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"maps"
@@ -30,9 +31,9 @@ func (m *agentMetrics) snapshot() (map[string]float64, map[string]int64) {
 	return maps.Clone(m.gauges), maps.Clone(m.counters)
 }
 
-func (m *agentMetrics) report(baseURL string) error {
+func (m *agentMetrics) report(ctx context.Context, baseURL string) error {
 	gauges, counters := m.snapshot()
-	sentCounters, err := SendMetrics(baseURL, gauges, counters)
+	sentCounters, err := SendMetrics(ctx, baseURL, gauges, counters)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -40,6 +41,24 @@ func (m *agentMetrics) report(baseURL string) error {
 		m.counters[name] -= value
 	}
 	return err
+}
+
+func (m *agentMetrics) runReports(ctx context.Context, baseURL string, reportInterval time.Duration) {
+	ticker := time.NewTicker(reportInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case tick := <-ticker.C:
+			reportCtx, cancel := context.WithDeadline(ctx, tick.Add(reportInterval))
+			err := m.report(reportCtx, baseURL)
+			cancel()
+			if err != nil && ctx.Err() == nil {
+				log.Println(err)
+			}
+		}
+	}
 }
 
 func main() {
@@ -71,14 +90,5 @@ func main() {
 		}
 	}()
 
-	nextReport := time.Now().Add(reportInterval)
-
-	for {
-		time.Sleep(time.Until(nextReport))
-		nextReport = time.Now().Add(reportInterval)
-		err := metrics.report(baseURL)
-		if err != nil {
-			log.Println(err)
-		}
-	}
+	metrics.runReports(context.Background(), baseURL, reportInterval)
 }

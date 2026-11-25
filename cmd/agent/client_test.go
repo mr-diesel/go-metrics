@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	models "github.com/mr-diesel/go-metrics/internal/model"
 )
@@ -33,7 +36,7 @@ func TestSendMetrics_ReturnsOnlySentCounters(t *testing.T) {
 			defer server.Close()
 
 			counters := map[string]int64{models.PollCount: 5}
-			sentCounters, err := SendMetrics(server.URL, nil, counters)
+			sentCounters, err := SendMetrics(t.Context(), server.URL, nil, counters)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("SendMetrics returned err = %v, wantErr = %t", err, tt.wantErr)
 			}
@@ -63,7 +66,7 @@ func TestSendMetrics_RejectsRedirect(t *testing.T) {
 	defer server.Close()
 
 	counters := map[string]int64{models.PollCount: 5}
-	sentCounters, err := SendMetrics(server.URL, nil, counters)
+	sentCounters, err := SendMetrics(t.Context(), server.URL, nil, counters)
 	if err == nil {
 		t.Error("SendMetrics returned nil after redirect")
 	}
@@ -91,7 +94,7 @@ func TestSendMetrics_PostsGaugeAsPlainText(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	gauges := map[string]float64{"room/temperature%2F": 12.5}
-	_, err := SendMetrics(server.URL, gauges, nil)
+	_, err := SendMetrics(t.Context(), server.URL, gauges, nil)
 	server.Close()
 
 	if err != nil {
@@ -102,16 +105,16 @@ func TestSendMetrics_PostsGaugeAsPlainText(t *testing.T) {
 	}
 }
 
-func TestSendMetrics_ContinuesAfterGaugeError(t *testing.T) {
+func TestSendMetrics_SendsGaugeWhenCounterFails(t *testing.T) {
 	var gaugeReceived, counterReceived bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/update/gauge/Temperature/12.5":
 			gaugeReceived = true
-			w.WriteHeader(http.StatusInternalServerError)
+			w.WriteHeader(http.StatusOK)
 		case "/update/counter/PollCount/5":
 			counterReceived = true
-			w.WriteHeader(http.StatusOK)
+			w.WriteHeader(http.StatusInternalServerError)
 		default:
 			t.Errorf("unexpected path %q", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -120,14 +123,45 @@ func TestSendMetrics_ContinuesAfterGaugeError(t *testing.T) {
 
 	gauges := map[string]float64{"Temperature": 12.5}
 	counters := map[string]int64{models.PollCount: 5}
-	sentCounters, err := SendMetrics(server.URL, gauges, counters)
+	sentCounters, err := SendMetrics(t.Context(), server.URL, gauges, counters)
 	server.Close()
 
 	if !gaugeReceived || !counterReceived {
 		t.Errorf("received gauge = %t, counter = %t; want both", gaugeReceived, counterReceived)
 	}
 	if err == nil {
-		t.Error("SendMetrics returned nil after gauge failed")
+		t.Error("SendMetrics returned nil after counter failed")
+	}
+	if len(sentCounters) != 0 {
+		t.Errorf("sent counters = %v, want none", sentCounters)
+	}
+}
+
+func TestSendMetrics_ReturnsSentCountersOnDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/update/counter/PollCount/5":
+			w.WriteHeader(http.StatusOK)
+		case "/update/gauge/Temperature/12.5":
+			select {
+			case <-r.Context().Done():
+			case <-time.After(time.Second):
+				w.WriteHeader(http.StatusOK)
+			}
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
+	defer cancel()
+	gauges := map[string]float64{"Temperature": 12.5}
+	counters := map[string]int64{models.PollCount: 5}
+	sentCounters, err := SendMetrics(ctx, server.URL, gauges, counters)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("SendMetrics error = %v, want deadline exceeded", err)
 	}
 	if got := sentCounters[models.PollCount]; got != 5 {
 		t.Errorf("sent PollCount = %d, want 5", got)
@@ -143,7 +177,7 @@ func TestSendMetrics_ReportsAllErrors(t *testing.T) {
 	const gaugeName = "Temperature"
 	gauges := map[string]float64{gaugeName: 12.5}
 	counters := map[string]int64{models.PollCount: 5}
-	_, err := SendMetrics(server.URL, gauges, counters)
+	_, err := SendMetrics(t.Context(), server.URL, gauges, counters)
 	if err == nil {
 		t.Fatal("SendMetrics returned nil after both requests failed")
 	}
